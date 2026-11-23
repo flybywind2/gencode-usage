@@ -1,8 +1,7 @@
-import { execFile } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
 import type { OrcaWorkerApi } from 'orca/worker'
 import type { CreditPoolState, SetCreditsInput, UsageSnapshot } from './protocol'
 import {
@@ -15,8 +14,6 @@ import {
 } from './stats'
 
 export { buildCombinedSshExecSpec, buildExecSpec, type RunStatsTarget }
-
-const execFileAsync = promisify(execFile)
 
 const STATUS_BAR_ID = 'gencode-usage'
 const CREDITS_KEY = 'gencode.credits.v1'
@@ -40,24 +37,45 @@ function resolveLocalBinary(bin: string): string {
   return bin
 }
 
-function formatExecError(err: unknown): string {
-  if (!err || typeof err !== 'object') return String(err)
-  const rec = err as {
-    message?: string
-    stderr?: string
-    stdout?: string
-    killed?: boolean
-    signal?: string
-    code?: string | number
-  }
-  const stderr = typeof rec.stderr === 'string' ? rec.stderr.trim() : ''
-  if (stderr) {
-    return stderr.split(/\r?\n/).slice(-3).join(' | ')
-  }
-  if (rec.killed) {
-    return `명령 실행 시간 초과 (${rec.signal ?? 'timeout'}) — SSH 연결 또는 원격 gencode 응답이 지연되었습니다.`
-  }
-  return rec.message ?? String(err)
+function runCommand(file: string, argv: string[], timeoutMs: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(file, argv, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      env: process.env,
+    })
+    const outChunks: Buffer[] = []
+    const errChunks: Buffer[] = []
+    let timedOut = false
+
+    const timer = setTimeout(() => {
+      timedOut = true
+      child.kill('SIGTERM')
+    }, timeoutMs)
+
+    child.stdout.on('data', (chunk: Buffer) => outChunks.push(chunk))
+    child.stderr.on('data', (chunk: Buffer) => errChunks.push(chunk))
+    child.on('error', (err) => {
+      clearTimeout(timer)
+      reject(new Error(`${file} 실행 오류: ${err.message}`))
+    })
+    child.on('close', (code, signal) => {
+      clearTimeout(timer)
+      const stdout = Buffer.concat(outChunks).toString('utf8')
+      const stderr = Buffer.concat(errChunks).toString('utf8').trim()
+      if (code === 0) {
+        resolve(stdout)
+        return
+      }
+      if (timedOut) {
+        reject(new Error(`시간 초과(${Math.round(timeoutMs / 1000)}초): ${stderr || 'SSH/gencode 응답 없음'}`))
+        return
+      }
+      const detail = stderr || stdout.trim().slice(-200) || '(stderr/stdout 비어 있음)'
+      const tag = `exit=${code ?? 'null'}${signal ? `/${signal}` : ''}`
+      reject(new Error(`[${tag}] ${detail.split(/\r?\n/).slice(-3).join(' | ')}`))
+    })
+  })
 }
 
 async function defaultRunStats(target: RunStatsTarget, args: string[]): Promise<string> {
@@ -69,12 +87,7 @@ async function defaultRunStats(target: RunStatsTarget, args: string[]): Promise<
     isSsh && args.length === 1 && args[0] === '__combined__'
       ? buildCombinedSshExecSpec(effectiveTarget)
       : buildExecSpec(effectiveTarget, args)
-  const { stdout } = await execFileAsync(file, argv, {
-    timeout: 25_000,
-    maxBuffer: 1024 * 1024,
-    windowsHide: true,
-  })
-  return stdout
+  return runCommand(file, argv, 25_000)
 }
 
 interface PluginSettings {
@@ -188,7 +201,7 @@ export function createActivator(runStats: RunStatsFn = defaultRunStats) {
           error = 'gencode stats 출력을 해석하지 못했습니다.'
         }
       } catch (err) {
-        error = formatExecError(err)
+        error = err instanceof Error ? err.message : String(err)
       }
 
       const snapshot = buildUsageSnapshot({

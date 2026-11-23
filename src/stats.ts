@@ -28,7 +28,7 @@ export function buildExecSpec(
   }
   return {
     file: 'ssh',
-    argv: ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', host, bin, ...args],
+    argv: ['-n', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'LogLevel=ERROR', host, bin, ...args],
   }
 }
 
@@ -41,10 +41,10 @@ export function buildCombinedSshExecSpec(target: RunStatsTarget): { file: string
   if (!SAFE_BIN_RE.test(bin)) {
     throw new Error(`SSH 원격 실행에 허용되지 않는 gencodeBin 경로입니다: ${bin}`)
   }
-  const remoteCmd = `${bin} stats --days 1 && printf '\\n${COMBINED_STATS_MARKER}\\n' && ${bin} stats`
+  const remoteCmd = `${bin} stats --days 1 && echo ${COMBINED_STATS_MARKER} && ${bin} stats`
   return {
     file: 'ssh',
-    argv: ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', host, remoteCmd],
+    argv: ['-n', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'LogLevel=ERROR', host, remoteCmd],
   }
 }
 

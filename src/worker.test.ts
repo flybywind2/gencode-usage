@@ -64,7 +64,20 @@ test('builds local and remote SSH exec specs safely', () => {
     buildExecSpec({ sshHost: 'ubuntu@my-server', gencodeBin: '/usr/bin/gencode' }, ['stats', '--days', '1']),
     {
       file: 'ssh',
-      argv: ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', 'ubuntu@my-server', '/usr/bin/gencode', 'stats', '--days', '1'],
+      argv: [
+        '-n',
+        '-o',
+        'BatchMode=yes',
+        '-o',
+        'ConnectTimeout=10',
+        '-o',
+        'LogLevel=ERROR',
+        'ubuntu@my-server',
+        '/usr/bin/gencode',
+        'stats',
+        '--days',
+        '1',
+      ],
     },
   )
   assert.throws(() => buildExecSpec({ sshHost: '-oProxyCommand=bad', gencodeBin: 'gencode' }, ['stats']))
