@@ -1,0 +1,85 @@
+{
+  "manifestVersion": 2,
+  "id": "gencode-usage",
+  "name": "GenCode Usage",
+  "version": "0.1.0",
+  "description": "Shows GenCode (Genspark) token/cost usage and credit pool tier (GREEN/YELLOW/RED/EXHAUSTED) in the Orca status bar and sidebar panel, locally or over SSH.",
+  "license": "MIT",
+  "homepage": "https://github.com/flybywind2/gencode-usage",
+  "engines": {
+    "orca": ">=1.4.248"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "contributes": {
+    "statusBarItems": [
+      {
+        "id": "gencode-usage",
+        "text": "GenCode …",
+        "icon": "gauge",
+        "tone": "neutral",
+        "tooltip": "GenCode 사용량 (클릭해 새로고침)",
+        "command": "gencodeUsage.refresh"
+      }
+    ],
+    "commands": [
+      {
+        "id": "gencodeUsage.refresh",
+        "title": "Refresh GenCode Usage"
+      }
+    ],
+    "panels": [
+      {
+        "id": "gencode-usage",
+        "title": "GenCode Usage",
+        "icon": "gauge",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ],
+    "settings": [
+      {
+        "key": "sshHost",
+        "title": "SSH host (optional)",
+        "description": "Leave empty to run gencode locally. Set an SSH config alias or user@host to read gencode stats from a remote Linux server.",
+        "type": "string",
+        "default": "",
+        "placeholder": "e.g. orca-server or ubuntu@1.2.3.4"
+      },
+      {
+        "key": "gencodeBin",
+        "title": "GenCode CLI path",
+        "description": "Executable name or absolute path for the gencode CLI (on the target host).",
+        "type": "string",
+        "default": "gencode",
+        "placeholder": "gencode or /usr/bin/gencode"
+      },
+      {
+        "key": "refreshIntervalSec",
+        "title": "Refresh interval (seconds)",
+        "description": "How often the worker polls `gencode stats` in the background.",
+        "type": "integer",
+        "default": 60,
+        "minimum": 15,
+        "maximum": 3600
+      },
+      {
+        "key": "dailyBudgetUsd",
+        "title": "Daily cost budget (USD, optional)",
+        "description": "When no manual credit balance is set, compute status bar percentage from today's cost against this USD budget (0 disables).",
+        "type": "number",
+        "default": 0,
+        "minimum": 0
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "storage:own"
+    },
+    {
+      "kind": "settings:own"
+    }
+  ]
+}
