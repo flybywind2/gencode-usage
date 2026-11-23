@@ -9,6 +9,8 @@ export interface RunStatsTarget {
   gencodeBin: string
 }
 
+export const COMBINED_STATS_MARKER = '===GENCODE_ALL_STATS==='
+
 export function buildExecSpec(
   target: RunStatsTarget,
   args: string[],
@@ -27,6 +29,22 @@ export function buildExecSpec(
   return {
     file: 'ssh',
     argv: ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', host, bin, ...args],
+  }
+}
+
+export function buildCombinedSshExecSpec(target: RunStatsTarget): { file: string; argv: string[] } {
+  const bin = target.gencodeBin.trim() || 'gencode'
+  const host = target.sshHost.trim()
+  if (!SAFE_SSH_HOST_RE.test(host)) {
+    throw new Error(`유효하지 않은 SSH 호스트 형식입니다: ${host}`)
+  }
+  if (!SAFE_BIN_RE.test(bin)) {
+    throw new Error(`SSH 원격 실행에 허용되지 않는 gencodeBin 경로입니다: ${bin}`)
+  }
+  const remoteCmd = `${bin} stats --days 1 && printf '\\n${COMBINED_STATS_MARKER}\\n' && ${bin} stats`
+  return {
+    file: 'ssh',
+    argv: ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', host, remoteCmd],
   }
 }
 

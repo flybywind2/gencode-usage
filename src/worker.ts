@@ -5,9 +5,16 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { OrcaWorkerApi } from 'orca/worker'
 import type { CreditPoolState, SetCreditsInput, UsageSnapshot } from './protocol'
-import { buildExecSpec, buildUsageSnapshot, parseGencodeStats, type RunStatsTarget } from './stats'
+import {
+  buildCombinedSshExecSpec,
+  buildExecSpec,
+  buildUsageSnapshot,
+  COMBINED_STATS_MARKER,
+  parseGencodeStats,
+  type RunStatsTarget,
+} from './stats'
 
-export { buildExecSpec, type RunStatsTarget }
+export { buildCombinedSshExecSpec, buildExecSpec, type RunStatsTarget }
 
 const execFileAsync = promisify(execFile)
 
@@ -33,13 +40,37 @@ function resolveLocalBinary(bin: string): string {
   return bin
 }
 
+function formatExecError(err: unknown): string {
+  if (!err || typeof err !== 'object') return String(err)
+  const rec = err as {
+    message?: string
+    stderr?: string
+    stdout?: string
+    killed?: boolean
+    signal?: string
+    code?: string | number
+  }
+  const stderr = typeof rec.stderr === 'string' ? rec.stderr.trim() : ''
+  if (stderr) {
+    return stderr.split(/\r?\n/).slice(-3).join(' | ')
+  }
+  if (rec.killed) {
+    return `명령 실행 시간 초과 (${rec.signal ?? 'timeout'}) — SSH 연결 또는 원격 gencode 응답이 지연되었습니다.`
+  }
+  return rec.message ?? String(err)
+}
+
 async function defaultRunStats(target: RunStatsTarget, args: string[]): Promise<string> {
-  const effectiveTarget: RunStatsTarget = target.sshHost.trim()
+  const isSsh = target.sshHost.trim().length > 0
+  const effectiveTarget: RunStatsTarget = isSsh
     ? target
     : { ...target, gencodeBin: resolveLocalBinary(target.gencodeBin) }
-  const { file, argv } = buildExecSpec(effectiveTarget, args)
+  const { file, argv } =
+    isSsh && args.length === 1 && args[0] === '__combined__'
+      ? buildCombinedSshExecSpec(effectiveTarget)
+      : buildExecSpec(effectiveTarget, args)
   const { stdout } = await execFileAsync(file, argv, {
-    timeout: 12_000,
+    timeout: 25_000,
     maxBuffer: 1024 * 1024,
     windowsHide: true,
   })
@@ -135,17 +166,29 @@ export function createActivator(runStats: RunStatsFn = defaultRunStats) {
       }
 
       try {
-        const [todayOut, allOut] = await Promise.all([
-          runStats(target, ['stats', '--days', '1']),
-          runStats(target, ['stats']),
-        ])
+        let todayOut: string
+        let allOut: string
+        if (target.sshHost.trim().length > 0 && runStats === defaultRunStats) {
+          const combined = await runStats(target, ['__combined__'])
+          const splitIdx = combined.indexOf(COMBINED_STATS_MARKER)
+          if (splitIdx >= 0) {
+            todayOut = combined.slice(0, splitIdx)
+            allOut = combined.slice(splitIdx + COMBINED_STATS_MARKER.length)
+          } else {
+            todayOut = combined
+            allOut = combined
+          }
+        } else {
+          todayOut = await runStats(target, ['stats', '--days', '1'])
+          allOut = await runStats(target, ['stats'])
+        }
         today = parseGencodeStats(todayOut)
         allTime = parseGencodeStats(allOut)
         if (!today && !allTime) {
           error = 'gencode stats 출력을 해석하지 못했습니다.'
         }
       } catch (err) {
-        error = err instanceof Error ? err.message : String(err)
+        error = formatExecError(err)
       }
 
       const snapshot = buildUsageSnapshot({
