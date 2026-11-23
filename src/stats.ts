@@ -7,9 +7,29 @@ const SAFE_BIN_RE = /^[A-Za-z0-9_./~:-]{1,256}$/
 export interface RunStatsTarget {
   sshHost: string
   gencodeBin: string
+  sshConfigPath?: string
 }
 
 export const COMBINED_STATS_MARKER = '===GENCODE_ALL_STATS==='
+
+function sshBaseArgs(target: RunStatsTarget, verbose = false): string[] {
+  const args = [
+    ...(verbose ? ['-v'] : []),
+    '-n',
+    '-o',
+    'BatchMode=yes',
+    '-o',
+    'ConnectTimeout=10',
+    '-o',
+    'ControlMaster=no',
+    '-o',
+    'ControlPath=none',
+  ]
+  if (target.sshConfigPath) {
+    args.push('-F', target.sshConfigPath)
+  }
+  return args
+}
 
 export function buildExecSpec(
   target: RunStatsTarget,
@@ -28,11 +48,14 @@ export function buildExecSpec(
   }
   return {
     file: 'ssh',
-    argv: ['-n', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'LogLevel=ERROR', host, bin, ...args],
+    argv: [...sshBaseArgs(target), host, bin, ...args],
   }
 }
 
-export function buildCombinedSshExecSpec(target: RunStatsTarget): { file: string; argv: string[] } {
+export function buildCombinedSshExecSpec(
+  target: RunStatsTarget,
+  verbose = false,
+): { file: string; argv: string[] } {
   const bin = target.gencodeBin.trim() || 'gencode'
   const host = target.sshHost.trim()
   if (!SAFE_SSH_HOST_RE.test(host)) {
@@ -44,7 +67,7 @@ export function buildCombinedSshExecSpec(target: RunStatsTarget): { file: string
   const remoteCmd = `${bin} stats --days 1 && echo ${COMBINED_STATS_MARKER} && ${bin} stats`
   return {
     file: 'ssh',
-    argv: ['-n', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'LogLevel=ERROR', host, remoteCmd],
+    argv: [...sshBaseArgs(target, verbose), host, remoteCmd],
   }
 }
 

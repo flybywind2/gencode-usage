@@ -37,7 +37,15 @@ function resolveLocalBinary(bin: string): string {
   return bin
 }
 
-function runCommand(file: string, argv: string[], timeoutMs: number): Promise<string> {
+interface CommandOutput {
+  code: number | null
+  signal: NodeJS.Signals | null
+  stdout: string
+  stderr: string
+  timedOut: boolean
+}
+
+function runCommandRaw(file: string, argv: string[], timeoutMs: number): Promise<CommandOutput> {
   return new Promise((resolve, reject) => {
     const child = spawn(file, argv, {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -61,33 +69,66 @@ function runCommand(file: string, argv: string[], timeoutMs: number): Promise<st
     })
     child.on('close', (code, signal) => {
       clearTimeout(timer)
-      const stdout = Buffer.concat(outChunks).toString('utf8')
-      const stderr = Buffer.concat(errChunks).toString('utf8').trim()
-      if (code === 0) {
-        resolve(stdout)
-        return
-      }
-      if (timedOut) {
-        reject(new Error(`시간 초과(${Math.round(timeoutMs / 1000)}초): ${stderr || 'SSH/gencode 응답 없음'}`))
-        return
-      }
-      const detail = stderr || stdout.trim().slice(-200) || '(stderr/stdout 비어 있음)'
-      const tag = `exit=${code ?? 'null'}${signal ? `/${signal}` : ''}`
-      reject(new Error(`[${tag}] ${detail.split(/\r?\n/).slice(-3).join(' | ')}`))
+      resolve({
+        code,
+        signal,
+        stdout: Buffer.concat(outChunks).toString('utf8'),
+        stderr: Buffer.concat(errChunks).toString('utf8').trim(),
+        timedOut,
+      })
     })
   })
+}
+
+function resolveSshConfigPath(): string | undefined {
+  const candidate = join(homedir(), '.ssh', 'config')
+  return existsSync(candidate) ? candidate : undefined
 }
 
 async function defaultRunStats(target: RunStatsTarget, args: string[]): Promise<string> {
   const isSsh = target.sshHost.trim().length > 0
   const effectiveTarget: RunStatsTarget = isSsh
-    ? target
+    ? { ...target, sshConfigPath: target.sshConfigPath ?? resolveSshConfigPath() }
     : { ...target, gencodeBin: resolveLocalBinary(target.gencodeBin) }
-  const { file, argv } =
-    isSsh && args.length === 1 && args[0] === '__combined__'
-      ? buildCombinedSshExecSpec(effectiveTarget)
-      : buildExecSpec(effectiveTarget, args)
-  return runCommand(file, argv, 25_000)
+  const useCombined = isSsh && args.length === 1 && args[0] === '__combined__'
+  const { file, argv } = useCombined
+    ? buildCombinedSshExecSpec(effectiveTarget)
+    : buildExecSpec(effectiveTarget, args)
+
+  const res = await runCommandRaw(file, argv, 25_000)
+  if (res.code === 0) {
+    return res.stdout
+  }
+  if (res.timedOut) {
+    throw new Error(`시간 초과(25초): ${res.stderr || 'SSH/gencode 응답 없음'}`)
+  }
+
+  let detail = res.stderr || res.stdout.trim()
+  if (!detail && isSsh) {
+    // Re-probe once with ssh -v so we can show the exact reason SSH exited 255.
+    try {
+      const diagSpec = buildCombinedSshExecSpec(effectiveTarget, true)
+      const diagArgv = [...diagSpec.argv.slice(0, -1), 'true']
+      const diag = await runCommandRaw('ssh', diagArgv, 10_000)
+      const diagLines = (diag.stderr || diag.stdout)
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean)
+      const interesting = diagLines.filter(
+        (l) =>
+          /denied|refused|resolve|no such|error|failed|identity|config|connecting|closed|bad|key/i.test(
+            l,
+          ),
+      )
+      const picked = (interesting.length > 0 ? interesting : diagLines).slice(-4).join(' | ')
+      detail = picked || `ssh -v 출력 없음 (platform=${process.platform}, cfg=${effectiveTarget.sshConfigPath ?? 'none'})`
+    } catch (diagErr) {
+      detail = diagErr instanceof Error ? diagErr.message : String(diagErr)
+    }
+  }
+
+  const tag = `exit=${res.code ?? 'null'}${res.signal ? `/${res.signal}` : ''}`
+  throw new Error(`[${tag}] ${(detail || '(출력 없음)').split(/\r?\n/).slice(-4).join(' | ')}`)
 }
 
 interface PluginSettings {
