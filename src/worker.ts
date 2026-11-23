@@ -1,4 +1,7 @@
 import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { OrcaWorkerApi } from 'orca/worker'
 import type { CreditPoolState, SetCreditsInput, UsageSnapshot } from './protocol'
@@ -14,8 +17,27 @@ const SNAPSHOT_KEY = 'gencode.snapshot.v1'
 
 export type RunStatsFn = (target: RunStatsTarget, args: string[]) => Promise<string>
 
+function resolveLocalBinary(bin: string): string {
+  if (bin !== 'gencode') return bin
+  const home = homedir()
+  const candidates = [
+    '/opt/homebrew/bin/gencode',
+    '/usr/local/bin/gencode',
+    '/usr/bin/gencode',
+    join(home, '.local', 'bin', 'gencode'),
+    join(home, '.npm-global', 'bin', 'gencode'),
+  ]
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate
+  }
+  return bin
+}
+
 async function defaultRunStats(target: RunStatsTarget, args: string[]): Promise<string> {
-  const { file, argv } = buildExecSpec(target, args)
+  const effectiveTarget: RunStatsTarget = target.sshHost.trim()
+    ? target
+    : { ...target, gencodeBin: resolveLocalBinary(target.gencodeBin) }
+  const { file, argv } = buildExecSpec(effectiveTarget, args)
   const { stdout } = await execFileAsync(file, argv, {
     timeout: 12_000,
     maxBuffer: 1024 * 1024,
@@ -33,7 +55,11 @@ interface PluginSettings {
 
 async function readSettings(orca: OrcaWorkerApi): Promise<PluginSettings> {
   try {
-    const raw = (await orca.host.call('settings.get')) as Record<string, unknown> | undefined
+    const response = (await orca.host.call('settings.get')) as Record<string, unknown> | undefined
+    const raw =
+      response && typeof response.settings === 'object' && response.settings !== null
+        ? (response.settings as Record<string, unknown>)
+        : response
     const sshHost = typeof raw?.sshHost === 'string' ? raw.sshHost.trim() : ''
     const gencodeBin =
       typeof raw?.gencodeBin === 'string' && raw.gencodeBin.trim().length > 0

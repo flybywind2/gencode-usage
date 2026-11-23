@@ -74,7 +74,9 @@ test('updates status bar from gencode stats and computes credit pool tiers', asy
   const statusUpdates: unknown[] = []
   const host = mockHost({
     results: {
-      'settings.get': { sshHost: '', gencodeBin: 'gencode', refreshIntervalSec: 60, dailyBudgetUsd: 0 },
+      'settings.get': {
+        settings: { sshHost: '', gencodeBin: 'gencode', refreshIntervalSec: 60, dailyBudgetUsd: 0 },
+      },
       'statusBar.update': (params: unknown) => {
         statusUpdates.push(params)
         return { ok: true }
